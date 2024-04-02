@@ -1,0 +1,28 @@
+[package]
+name = "moderatior"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.28.2", features = [
+  "net",
+  "sync",
+  "rt",
+  "parking_lot",
+], default-features = false }
+serenity = { version = "0.12", features = [
+  "builder",
+  "client",
+  "rustls_backend",
+  "gateway",
+  "model",
+], default-features = false }
+poise = { git = "https://github.com/serenity-rs/poise" }
+anyhow = "1.0.75"
+jemallocator-global = "0.3.2"
+ahash = "0.8.11"
+emoji = { git = "https://github.com/apricot-conservation-project/emoji", version = "0.1.0" }
+
+[profile.release]
+strip = true
+lto = "thin"
