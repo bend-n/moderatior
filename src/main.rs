@@ -48,13 +48,13 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                 RolesRemove { new, .. } => new
                     .as_ref()?
                     .into_iter()
-                    .map(|x| format!("{ADD} <@&{}>", x.id))
+                    .map(|x| format!("{CANCEL} <@&{}>", x.id))
                     .reduce(|a, b| format!("{a} {b}"))
                     .unwrap_or_else(String::new),
                 RolesAdded { new, .. } => new
                     .as_ref()?
                     .into_iter()
-                    .map(|x| format!("{CANCEL} <@&{}>", x.id))
+                    .map(|x| format!("{ADD} <@&{}>", x.id))
                     .reduce(|a, b| format!("{a} {b}"))
                     .unwrap_or_else(String::new),
                 _ => return None,
