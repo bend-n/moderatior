@@ -1,13 +1,12 @@
-#![feature(if_let_guard, let_chains)]
+#![feature(if_let_guard, let_chains, lazy_cell)]
 use anyhow::Result;
 use emoji::named::*;
 use poise::{serenity_prelude::*, CreateReply};
 use std::convert::identity;
 use std::fs::read_to_string;
 use std::pin::pin;
-use std::sync::Arc;
 use std::time::Duration;
-
+mod db;
 #[macro_export]
 macro_rules! send {
     ($e:expr, $fmt:literal $(, $args:expr)* $(,)?) => {
@@ -81,14 +80,10 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                 format!("{ROTATE} roles of <@{t}>: {changes}")
             }
             Member(MemberAction::RoleUpdate) => format!("{ROTATE} roles: {changes}"),
-            Message(MessageAction::Delete) =>
-                format!("{CANCEL} deleted message by <@{}>", log.target_id?),
             _ => return None,
         }
     ))
 }
-
-const PFX: char = '}';
 
 async fn lop(c: serenity::client::Context) {
     let c = &c;
@@ -135,14 +130,87 @@ impl Bot {
             std::env::var("TOKEN").unwrap_or_else(|_| read_to_string("token").expect("wher token"));
         let f = poise::Framework::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![help(), prune(), run()],
+                commands: vec![help(), prune(), reload(), run()],
                 on_error: |e| Box::pin(on_error(e)),
-                prefix_options: poise::PrefixFrameworkOptions {
-                    edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
-                        std::time::Duration::from_secs(2 * 60),
-                    ))),
-                    prefix: Some(PFX.to_string()),
-                    ..Default::default()
+                event_handler: |c, e, _, _| {
+                    Box::pin(async move {
+                        match e {
+                            FullEvent::Message { new_message } => db::set_m(new_message.clone()),
+                            FullEvent::MessageUpdate { event: MessageUpdateEvent { id, channel_id, content: Some(content), author: Some(User{ id: author, bot, ..}), attachments: Some(attachments), .. }, .. } if !bot => {
+                                if let Some((oc, _, _)) = db::get(id.get()) {
+                                    let diff = diff::lines(content, &oc).into_iter().map(|diff| {
+                                        match diff {
+                                            diff::Result::Left(l) => format!("+ {l}"),
+                                            diff::Result::Right(r) => format!("- {r}"),
+                                            diff::Result::Both(l, _) => format!("  {l}"),
+                                        }
+                                    }).fold(String::new(), |a,b| format!("{a}\n{b}"));
+                                    ChannelId::new(1226396559185285280)
+                                    .send_message(
+                                        c,
+                                        CreateMessage::new()
+                                            .allowed_mentions(
+                                                CreateAllowedMentions::new()
+                                                    .empty_users()
+                                                    .empty_roles(),
+                                            )
+                                            .content(format!("<t:{}:d> <@{author}> edited their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())),
+                                    )
+                                    .await
+                                    .unwrap();   
+                                }
+                                db::set(id.get(), (content.clone(), attachments.iter().map(|a|a.url.clone()).collect(), author.get()))
+                            },
+                            FullEvent::MessageDelete {
+                                deleted_message_id, ..
+                            } => {
+                                let log = c.http().get_guild(925674713429184564.into()).await.unwrap()
+                                    .audit_logs(c, Some(audit_log::Action::Message(MessageAction::Delete)), None, None, Some(1)).await?
+                                    .entries.into_iter().next().unwrap();
+                                let (author, who) = (log.target_id.unwrap(), log.user_id);
+                                ChannelId::new(1226396559185285280)
+                                    .send_message(
+                                        c,
+                                        CreateMessage::new()
+                                            .allowed_mentions(
+                                                CreateAllowedMentions::new()
+                                                    .empty_users()
+                                                    .empty_roles(),
+                                            )
+                                            .content(match db::get(deleted_message_id.get()) {
+                                                Some((content, links, a)) => {
+                                                    if a == 1224510735959462068 { return Ok(()) }
+                                                    if author.get() != a {
+                                                        format!(
+                                                            "<t:{}:d> <@{a}> {CANCEL} deleted their own message:\n{content}\n\n{}",
+                                                            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                                                            links
+                                                                .into_iter()
+                                                                .reduce(|a, b| format!("{a} {b}"))
+                                                                .unwrap_or_else(String::new)
+                                                        )
+                                                    } else {
+                                                        format!(
+                                                            "<t:{}:d> <@{who}> {CANCEL} deleted message by <@{author}>:\n{content}\n\n{}",
+                                                            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                                                            links
+                                                                .into_iter()
+                                                                .reduce(|a, b| format!("{a} {b}"))
+                                                                .unwrap_or_else(String::new)
+                                                        )
+                                                    }
+                                                }
+                                                None => format!("<@{who}> {CANCEL} deleted message by <@{author}>"),
+                                                
+                                            }),
+                                    )
+                                    .await
+                                    .unwrap();
+                            }
+                            _ => (),
+                        }
+                        Ok(())
+                    })
                 },
                 ..Default::default()
             })
@@ -232,4 +300,37 @@ pub async fn prune(c: Context<'_>) -> Result<()> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     Bot::spawn().await;
+}
+
+#[poise::command(slash_command)]
+pub async fn reload(c: Context<'_>) -> Result<()> {
+    if c.author().id != OWNER {
+        poise::say_reply(c, "access denied. this incident will be reported").await?;
+        return Ok(());
+    }
+    let h = poise::say_reply(c, "0 complete").await?;
+    let mut n = 0u64;
+    let chs = c.guild().unwrap().channels.clone();
+    for ch in chs.keys() {
+        let mut stream = pin!(ch.messages_iter(c));
+        while let Some(Ok(next)) = futures::StreamExt::next(&mut stream).await {
+            if db::get(next.id.get()).is_some() {
+                break;
+            }
+            n += 1;
+            db::set_m(next);
+        }
+        _ = h
+            .edit(
+                c,
+                CreateReply::default().content(format!("+{n}, {:.2} mbs", db::sz())),
+            )
+            .await;
+    }
+    h.edit(
+        c,
+        CreateReply::default().content(format!("+{n}: {:.2} mbs", db::sz())),
+    )
+    .await?;
+    Ok(())
 }

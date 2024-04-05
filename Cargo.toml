@@ -22,6 +22,9 @@ anyhow = "1.0.75"
 jemallocator-global = "0.3.2"
 ahash = "0.8.11"
 emoji = { git = "https://github.com/apricot-conservation-project/emoji", version = "0.1.0" }
+kv = { version = "0.24.0", features = ["bincode-value"] }
+sled = { version = "0.34.7", features = ["compression"] }
+diff = "0.1.13"
 
 [profile.release]
 strip = true
