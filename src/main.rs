@@ -38,12 +38,10 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
         .into_iter()
         .map(|x| {
             Some(match x {
-                Nick { old, new } => {
-                    format!("nick ~~{}~~ {RIGHT} {}", old.as_ref()?, new.as_ref()?)
-                }
-                Name { old, new } => {
-                    format!("name ~~{}~~ {RIGHT} {}", old.as_ref()?, new.as_ref()?)
-                }
+                Nick { old: Some(old), new: Some(new) } => format!("nick ~~{old}~~ {RIGHT} {new}"),
+                Nick { new: Some(new),.. } => format!("nick {ADD} {new}"),
+                Name { old: Some(old), new: Some(new) } => format!("name ~~{old}~~ {RIGHT} {new}"),
+                Name { new: Some(new), .. } => format!("name {ADD} {new}"),
                 RolesRemove { new, .. } => new
                     .as_ref()?
                     .into_iter()
