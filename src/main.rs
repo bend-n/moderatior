@@ -142,7 +142,7 @@ impl Bot {
                                             diff::Result::Right(r) => format!("- {r}"),
                                             diff::Result::Both(l, _) => format!("  {l}"),
                                         }
-                                    }).fold(String::new(), |a,b| format!("{a}\n{b}"));
+                                    }).fold(String::new(), |a,b| format!("{a}\n{b}")).replace('`', "\u{200b}`");
                                     ChannelId::new(1226396559185285280)
                                     .send_message(
                                         c,
@@ -160,7 +160,7 @@ impl Bot {
                                 db::set(id.get(), (content.clone(), attachments.iter().map(|a|a.url.clone()).collect(), author.get()))
                             },
                             FullEvent::MessageDelete {
-                                deleted_message_id, ..
+                                deleted_message_id, channel_id, ..
                             } => {
                                 let log = c.http().get_guild(925674713429184564.into()).await.unwrap()
                                     .audit_logs(c, Some(audit_log::Action::Message(MessageAction::Delete)), None, None, Some(1)).await?
@@ -180,7 +180,7 @@ impl Bot {
                                                     if a == 1224510735959462068 { return Ok(()) }
                                                     if author.get() != a {
                                                         format!(
-                                                            "<t:{}:d> <@{a}> {CANCEL} deleted their own message:\n{content}\n\n{}",
+                                                            "<t:{}:d> <@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):\n{content}\n\n{}",
                                                             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                                                             links
                                                                 .into_iter()
@@ -189,7 +189,7 @@ impl Bot {
                                                         )
                                                     } else {
                                                         format!(
-                                                            "<t:{}:d> <@{who}> {CANCEL} deleted message by <@{author}>:\n{content}\n\n{}",
+                                                            "<t:{}:d> <@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):\n{content}\n\n{}",
                                                             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                                                             links
                                                                 .into_iter()
@@ -198,7 +198,7 @@ impl Bot {
                                                         )
                                                     }
                                                 }
-                                                None => format!("<@{who}> {CANCEL} deleted message by <@{author}>"),
+                                                None => format!("<@{who}> {CANCEL} deleted message by <@{author}> in <#{channel_id}> (content unavailable)"),
                                                 
                                             }),
                                     )
