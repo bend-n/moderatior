@@ -19,6 +19,7 @@ fn last() -> u64 {
         .ok()
         .map(|x| {
             x.into_iter()
+                .take_while(u8::is_ascii_digit)
                 .fold(0u64, |acc, x| acc * 10 + (x - b'0') as u64)
         })
         .unwrap_or(0)
@@ -38,9 +39,15 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
         .into_iter()
         .map(|x| {
             Some(match x {
-                Nick { old: Some(old), new: Some(new) } => format!("nick ~~{old}~~ {RIGHT} {new}"),
-                Nick { new: Some(new),.. } => format!("nick {ADD} {new}"),
-                Name { old: Some(old), new: Some(new) } => format!("name ~~{old}~~ {RIGHT} {new}"),
+                Nick {
+                    old: Some(old),
+                    new: Some(new),
+                } => format!("nick ~~{old}~~ {RIGHT} {new}"),
+                Nick { new: Some(new), .. } => format!("nick {ADD} {new}"),
+                Name {
+                    old: Some(old),
+                    new: Some(new),
+                } => format!("name ~~{old}~~ {RIGHT} {new}"),
                 Name { new: Some(new), .. } => format!("name {ADD} {new}"),
                 RolesRemove { new, .. } => new
                     .as_ref()?
@@ -54,6 +61,69 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                     .map(|x| format!("{ADD} <@&{}>", x.id))
                     .reduce(|a, b| format!("{a} {b}"))
                     .unwrap_or_else(String::new),
+                Color {
+                    old: Some(old),
+                    new: Some(new),
+                } => match (old, new) {
+                    (0, new) => format!("color {RIGHT} #{new:x}"),
+                    (old, 0) => format!("color ~~#{old:x}~~ {RIGHT} no color"),
+                    (old, new) => format!("color ~~#{old:x}~~ {RIGHT} #{new:x}"),
+                },
+                Topic {
+                    old: Some(old),
+                    new: Some(new),
+                } => format!("topic ```diff{}\n```", diff(old, new)),
+                Topic {
+                    old: None,
+                    new: Some(new),
+                } => format!("topic {new}"),
+                RateLimitPerUser {
+                    old: Some(old),
+                    new: Some(new),
+                } => {
+                    let old_f = humantime::format_duration(Duration::from_secs(*old as _));
+                    let new_f = humantime::format_duration(Duration::from_secs(*new as _));
+                    match (old, new) {
+                        (_, 0) => format!("slowmode {CANCEL} (from {old_f})",),
+                        (0, _) => format!("slowmode {RIGHT} {new_f}"),
+                        (_, _) => format!("slowmode ~~{old_f}~~ {RIGHT} {new_f}"),
+                    }
+                }
+                Permissions {
+                    old: Some(old),
+                    new: Some(new),
+                } => {
+                    let list = |&x: &serenity::all::Permissions| {
+                        x.iter_names()
+                            .map(|(x, _)| x.replace("_", " ").to_lowercase())
+                            .reduce(|a, b| format!("{a}\n{b}"))
+                            .unwrap_or_else(String::new)
+                    };
+                    let new = list(new);
+                    if old.bits() == 0 {
+                        return Some(format!("permissions {RIGHT} {new}"));
+                    }
+                    let old = list(old);
+                    let mut removed = String::new();
+                    let mut added = String::new();
+                    diff::lines(&old, &new).into_iter().for_each(|diff| {
+                        use std::fmt::Write;
+                        match diff {
+                            diff::Result::Left(l) => write!(&mut added, "{l} ").unwrap(),
+                            diff::Result::Right(r) => write!(&mut removed, "{r} ").unwrap(),
+                            _ => (),
+                        }
+                    });
+                    let removed = match &*removed {
+                        "" => removed,
+                        x => format!("- {x}\n"),
+                    };
+                    let added = match &*added {
+                        "" => added,
+                        x => format!("+ {x}\n"),
+                    };
+                    format!("permissions ```diff\n{removed}{added}```")
+                }
                 _ => return None,
             })
         })
@@ -66,11 +136,20 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
         log.user_id,
         match log.action {
             GuildUpdate => format!("guild changes\n{changes}"),
-            Channel(ChannelAction::Create) => format!("{ADD} channel\n{changes}"),
-            Channel(ChannelAction::Delete) => format!("{CANCEL} channel\n{changes}"),
-            Channel(ChannelAction::Update) => format!("{ROTATE} channel\n{changes}"),
-            Member(MemberAction::Kick | MemberAction::BanAdd) =>
-                format!("{HAMMER} <@{}>", log.target_id?),
+            Channel(a) => format!(
+                "{} [channel]({})\n{changes}",
+                match a {
+                    ChannelAction::Create => ADD,
+                    ChannelAction::Delete => CANCEL,
+                    ChannelAction::Update => ROTATE,
+                    _ => return None,
+                },
+                format!(
+                    "https://discord.com/channels/925674713429184564/{}",
+                    log.target_id?
+                )
+            ),
+            Role(RoleAction::Update) => format!("{ROTATE} role <@&{}>\n{changes}", log.target_id?),
             Member(MemberAction::RoleUpdate)
                 if let Some(t) = log.target_id
                     && t.get() != log.user_id.get() =>
@@ -120,6 +199,19 @@ async fn lop(c: serenity::client::Context) {
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
+
+fn diff(old: &str, new: &str) -> String {
+    diff::lines(old, new)
+        .into_iter()
+        .map(|diff| match diff {
+            diff::Result::Left(l) => format!("- {l}"),
+            diff::Result::Right(r) => format!("+ {r}"),
+            diff::Result::Both(l, _) => format!("  {l}"),
+        })
+        .fold(String::new(), |a, b| format!("{a}\n{b}"))
+        .replace('`', "\u{200b}`")
+}
+
 pub struct Bot;
 impl Bot {
     pub async fn spawn() {
@@ -128,21 +220,18 @@ impl Bot {
             std::env::var("TOKEN").unwrap_or_else(|_| read_to_string("token").expect("wher token"));
         let f = poise::Framework::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![help(), prune(), reload(), run()],
+                commands: vec![help(), reload()],
                 on_error: |e| Box::pin(on_error(e)),
                 event_handler: |c, e, _, _| {
                     Box::pin(async move {
                         match e {
+                            FullEvent::Ready { .. } => {
+                                tokio::spawn(lop(c.clone()));
+                            }
                             FullEvent::Message { new_message } => db::set_m(new_message.clone()),
                             FullEvent::MessageUpdate { event: MessageUpdateEvent { id, channel_id, content: Some(content), author: Some(User{ id: author, bot, ..}), attachments: Some(attachments), .. }, .. } if !bot => {
                                 if let Some((oc, _, _)) = db::get(id.get()) {
-                                    let diff = diff::lines(content, &oc).into_iter().map(|diff| {
-                                        match diff {
-                                            diff::Result::Left(l) => format!("+ {l}"),
-                                            diff::Result::Right(r) => format!("- {r}"),
-                                            diff::Result::Both(l, _) => format!("  {l}"),
-                                        }
-                                    }).fold(String::new(), |a,b| format!("{a}\n{b}")).replace('`', "\u{200b}`");
+                                    let diff = diff(&oc, content);
                                     ChannelId::new(1226396559185285280)
                                     .send_message(
                                         c,
@@ -152,10 +241,10 @@ impl Bot {
                                                     .empty_users()
                                                     .empty_roles(),
                                             )
-                                            .content(format!("<t:{}:d> <@{author}> edited their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())),
+                                            .content(format!("<@{author}> edited their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```")),
                                     )
                                     .await
-                                    .unwrap();   
+                                    .unwrap();
                                 }
                                 db::set(id.get(), (content.clone(), attachments.iter().map(|a|a.url.clone()).collect(), author.get()))
                             },
@@ -180,8 +269,7 @@ impl Bot {
                                                     if a == 1224510735959462068 { return Ok(()) }
                                                     if author.get() != a {
                                                         format!(
-                                                            "<t:{}:d> <@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):\n{content}\n\n{}",
-                                                            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                                                            "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):\n{content}\n\n{}",
                                                             links
                                                                 .into_iter()
                                                                 .reduce(|a, b| format!("{a} {b}"))
@@ -189,8 +277,7 @@ impl Bot {
                                                         )
                                                     } else {
                                                         format!(
-                                                            "<t:{}:d> <@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):\n{content}\n\n{}",
-                                                            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                                                            "<@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):\n{content}\n\n{}",
                                                             links
                                                                 .into_iter()
                                                                 .reduce(|a, b| format!("{a} {b}"))
@@ -199,7 +286,6 @@ impl Bot {
                                                     }
                                                 }
                                                 None => format!("<@{who}> {CANCEL} deleted message by <@{author}> in <#{channel_id}> (content unavailable)"),
-                                                
                                             }),
                                     )
                                     .await
@@ -258,42 +344,6 @@ pub async fn help(ctx: Context<'_>) -> Result<()> {
     Ok(())
 }
 const OWNER: u64 = 696196765564534825;
-#[poise::command(slash_command)]
-/// Run the logger
-pub async fn run(c: Context<'_>) -> Result<()> {
-    if c.author().id != OWNER {
-        poise::say_reply(c, "access denied. this incident will be reported").await?;
-        return Ok(());
-    }
-    poise::say_reply(c, OK).await?;
-    tokio::spawn(lop(c.serenity_context().clone()));
-    Ok(())
-}
-
-#[poise::command(slash_command)]
-/// Prune own messages.
-pub async fn prune(c: Context<'_>) -> Result<()> {
-    if c.author().id != OWNER {
-        poise::say_reply(c, "access denied. this incident will be reported").await?;
-        return Ok(());
-    }
-    let h = poise::say_reply(c, "working...").await?;
-    let hm = h.message().await.unwrap().id;
-    let g = c.http().get_guild(925674713429184564.into()).await.unwrap();
-    let ch = g.channel_id_from_name(c, "server-logs").unwrap();
-    let mut strm = pin!(ch.messages_iter(c));
-    while let Some(Ok(next)) = futures::StreamExt::next(&mut strm).await {
-        if next.id == hm {
-            continue;
-        }
-        if next.is_own(c) {
-            next.delete(c).await?;
-        }
-    }
-    h.edit(c, CreateReply::default().content(OK)).await?;
-    std::fs::write("last", &[b'0']).unwrap();
-    Ok(())
-}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
