@@ -14,21 +14,6 @@ macro_rules! send {
     };
 }
 
-fn last() -> u64 {
-    std::fs::read("last")
-        .ok()
-        .map(|x| {
-            x.into_iter()
-                .take_while(u8::is_ascii_digit)
-                .fold(0u64, |acc, x| acc * 10 + (x - b'0') as u64)
-        })
-        .unwrap_or(0)
-}
-
-fn set_last(x: u64) {
-    std::fs::write("last", x.to_string()).unwrap();
-}
-
 pub fn format(log: AuditLogEntry) -> Option<String> {
     use serenity::model::guild::audit_log::Action::*;
     use serenity::model::guild::audit_log::Change::*;
@@ -162,44 +147,6 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
     ))
 }
 
-async fn lop(c: serenity::client::Context) {
-    let c = &c;
-    let g = c.http().get_guild(925674713429184564.into()).await.unwrap();
-    let ch = g.channel_id_from_name(c, "server-logs").unwrap();
-    loop {
-        let l = last();
-        for log in g
-            .audit_logs(c, None, None, None, None)
-            .await
-            .unwrap()
-            .entries
-            .into_iter()
-            .rev()
-            .filter(|x| x.id.created_at().unix_timestamp() as u64 > l)
-        {
-            let Some(h) = format(log.clone()) else {
-                continue;
-            };
-            ch.send_message(
-                c,
-                CreateMessage::new()
-                    .allowed_mentions(CreateAllowedMentions::new().empty_users().empty_roles())
-                    .content(h),
-            )
-            .await
-            .unwrap();
-        }
-        set_last(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
-        // every minute
-        tokio::time::sleep(Duration::from_secs(60)).await;
-    }
-}
-
 fn diff(old: &str, new: &str) -> String {
     diff::lines(old, new)
         .into_iter()
@@ -225,9 +172,36 @@ impl Bot {
                 event_handler: |c, e, _, _| {
                     Box::pin(async move {
                         match e {
-                            FullEvent::Ready { .. } => {
-                                tokio::spawn(lop(c.clone()));
+                            FullEvent::GuildAuditLogEntryCreate { entry, .. } => {
+                                let Some(h) = format(entry.clone()) else {
+                                    return Ok(());
+                                };
+                                ChannelId::new(1220060625338761286).send_message(
+                                    c,
+                                    CreateMessage::new()
+                                        .allowed_mentions(CreateAllowedMentions::new().empty_users().empty_roles())
+                                        .content(h),
+                                )
+                                .await?;
                             }
+                            FullEvent::GuildMemberRemoval { user, member_data_if_available, .. } => {
+                                ChannelId::new(1220060625338761286)
+                                    .send_message(
+                                        c,
+                                        CreateMessage::new()
+                                            .allowed_mentions(
+                                                CreateAllowedMentions::new()
+                                                    .empty_users()
+                                                    .empty_roles(),
+                                            )
+                                            .content(format!("{LEFT} goodbye {}", match member_data_if_available {
+                                                Some(x) => x.nick.as_ref().unwrap_or(&user.name),
+                                                None => &user.name,
+                                            })),
+                                    )
+                                    .await
+                                    .unwrap();
+                            },
                             FullEvent::Message { new_message } => db::set_m(new_message.clone()),
                             FullEvent::MessageUpdate { event: MessageUpdateEvent { id, channel_id, content: Some(content), author: Some(User{ id: author, bot, ..}), attachments: Some(attachments), .. }, .. } if !bot => {
                                 if let Some((oc, _, _)) = db::get(id.get()) {
@@ -269,7 +243,7 @@ impl Bot {
                                                     if a == 1224510735959462068 { return Ok(()) }
                                                     if author.get() != a {
                                                         format!(
-                                                            "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):\n{content}\n\n{}",
+                                                            "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):```\n{content}\n```\n{}",
                                                             links
                                                                 .into_iter()
                                                                 .reduce(|a, b| format!("{a} {b}"))
@@ -277,7 +251,7 @@ impl Bot {
                                                         )
                                                     } else {
                                                         format!(
-                                                            "<@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):\n{content}\n\n{}",
+                                                            "<@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):```\n{content}\n```\n{}",
                                                             links
                                                                 .into_iter()
                                                                 .reduce(|a, b| format!("{a} {b}"))
