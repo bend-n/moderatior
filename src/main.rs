@@ -185,7 +185,7 @@ impl Bot {
                                 .await?;
                             }
                             FullEvent::GuildMemberRemoval { user, member_data_if_available, .. } => {
-                                ChannelId::new(1220060625338761286)
+                                ChannelId::new(944772532559568936)
                                     .send_message(
                                         c,
                                         CreateMessage::new()
@@ -194,10 +194,10 @@ impl Bot {
                                                     .empty_users()
                                                     .empty_roles(),
                                             )
-                                            .content(format!("{LEFT} goodbye {}", match member_data_if_available {
+                                            .content(format!("{LEFT} goodbye {} <@{}>", match member_data_if_available {
                                                 Some(x) => x.nick.as_ref().unwrap_or(&user.name),
                                                 None => &user.name,
-                                            })),
+                                            }, user.id)),
                                     )
                                     .await
                                     .unwrap();
@@ -280,16 +280,13 @@ impl Bot {
                 })
             })
             .build();
-        ClientBuilder::new(
-            tok,
-            GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT,
-        )
-        .framework(f)
-        .await
-        .unwrap()
-        .start()
-        .await
-        .unwrap();
+        ClientBuilder::new(tok, GatewayIntents::all())
+            .framework(f)
+            .await
+            .unwrap()
+            .start()
+            .await
+            .unwrap();
     }
 }
 type Context<'a> = poise::Context<'a, (), anyhow::Error>;
