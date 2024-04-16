@@ -184,16 +184,21 @@ impl Bot {
                                 )
                                 .await?;
                             }
+                            FullEvent::GuildMemberAddition { new_member } => {
+                                ChannelId::new(944772532559568936)
+                                    .send_message(
+                                        c,
+                                        CreateMessage::new()
+                                            .content(format!("{RIGHT} hi <@{}>", new_member.user.id),
+                                    ))
+                                    .await
+                                    .unwrap();                                
+                            }
                             FullEvent::GuildMemberRemoval { user, member_data_if_available, .. } => {
                                 ChannelId::new(944772532559568936)
                                     .send_message(
                                         c,
                                         CreateMessage::new()
-                                            .allowed_mentions(
-                                                CreateAllowedMentions::new()
-                                                    .empty_users()
-                                                    .empty_roles(),
-                                            )
                                             .content(format!("{LEFT} goodbye {} <@{}>", match member_data_if_available {
                                                 Some(x) => x.nick.as_ref().unwrap_or(&user.name),
                                                 None => &user.name,
