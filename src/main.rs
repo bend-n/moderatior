@@ -167,7 +167,7 @@ impl Bot {
             std::env::var("TOKEN").unwrap_or_else(|_| read_to_string("token").expect("wher token"));
         let f = poise::Framework::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![help(), reload()],
+                commands: vec![help(), reload(), redact()],
                 on_error: |e| Box::pin(on_error(e)),
                 event_handler: |c, e, _, _| {
                     Box::pin(async move {
@@ -192,7 +192,7 @@ impl Bot {
                                             .content(format!("{RIGHT} hi <@{}>", new_member.user.id),
                                     ))
                                     .await
-                                    .unwrap();                                
+                                    .unwrap();
                             }
                             FullEvent::GuildMemberRemoval { user, member_data_if_available, .. } => {
                                 ChannelId::new(944772532559568936)
@@ -356,5 +356,29 @@ pub async fn reload(c: Context<'_>) -> Result<()> {
         CreateReply::default().content(format!("+{n}: {:.2} mbs", db::sz())),
     )
     .await?;
+    Ok(())
+}
+
+#[poise::command(context_menu_command = "redact")]
+/// Redact a log.
+pub async fn redact(
+    c: Context<'_>,
+    #[description = "msg to redact"] mut message: Message,
+) -> Result<()> {
+    if message.is_own(c) {
+        message
+            .edit(
+                c,
+                EditMessage::default().content(format!("||[REDACTED] by <@{}>||", c.author().id)),
+            )
+            .await?;
+        let h =
+            poise::send_reply(c, poise::CreateReply::default().ephemeral(true).content(OK)).await?;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        _ = h.delete(c).await;
+    } else {
+        poise::say_reply(c, "access denied. this incident will be reported").await?;
+    }
     Ok(())
 }
