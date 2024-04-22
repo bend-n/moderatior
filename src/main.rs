@@ -14,6 +14,13 @@ macro_rules! send {
     };
 }
 
+const LEFT: &str = "<:l:1231827542676344892>";
+const RIGHT: &str = "<:r:1231826176197005363>";
+const ADD: &str = "<:a:1231823256672145449>";
+const ROTATE: &str = "<:c:1231822613115043871>";
+const CANCEL: &str = "<:x:1231825482572369980>";
+const EDIT: &str = "<:edi:1231825459688378460>";
+
 pub fn format(log: AuditLogEntry) -> Option<String> {
     use serenity::model::guild::audit_log::Action::*;
     use serenity::model::guild::audit_log::Change::*;
@@ -220,7 +227,7 @@ impl Bot {
                                                     .empty_users()
                                                     .empty_roles(),
                                             )
-                                            .content(format!("<@{author}> edited their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```")),
+                                            .content(format!("<@{author}> {EDIT} their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```")),
                                     )
                                     .await
                                     .unwrap();
@@ -233,6 +240,8 @@ impl Bot {
                                 let log = c.http().get_guild(925674713429184564.into()).await.unwrap()
                                     .audit_logs(c, Some(audit_log::Action::Message(MessageAction::Delete)), None, None, Some(1)).await?
                                     .entries.into_iter().next().unwrap();
+                            
+                                let since = std::time::SystemTime::now().duration_since( std::time::UNIX_EPOCH).unwrap().as_secs().saturating_sub(log.id.created_at().unix_timestamp() as _);
                                 let (author, who) = (log.target_id.unwrap(), log.user_id);
                                 ChannelId::new(1226396559185285280)
                                     .send_message(
@@ -246,7 +255,7 @@ impl Bot {
                                             .content(match db::get(deleted_message_id.get()) {
                                                 Some((content, links, a)) => {
                                                     if a == 1224510735959462068 { return Ok(()) }
-                                                    if author.get() != a {
+                                                    if author.get() != a || since > 20 {
                                                         format!(
                                                             "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):```\n{content}\n```\n{}",
                                                             links
