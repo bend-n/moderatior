@@ -1,4 +1,5 @@
 #![feature(if_let_guard, let_chains, lazy_cell)]
+#![allow(confusable_idents, mixed_script_confusables)]
 use anyhow::Result;
 use emoji::named::*;
 use poise::{serenity_prelude::*, CreateReply};
@@ -159,9 +160,12 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                 format!("{ROTATE} roles of <@{t}>: {changes}")
             }
             Member(MemberAction::RoleUpdate) => format!("{ROTATE} roles: {changes}"),
-            Member(MemberAction::BanAdd) => format!("{CANCEL} banned <@&{}>", log.target_id?),
-            Member(MemberAction::BanRemove) => format!("{CANCEL} unbanned <@&{}>", log.target_id?),
-            Member(MemberAction::Kick) => format!("{CANCEL} kicked <@&{}>", log.target_id?),
+            Member(MemberAction::BanAdd) => format!(
+                "{CANCEL} banned <@{}> (read messages with </spy:1237586279156416592>)",
+                log.target_id?
+            ),
+            Member(MemberAction::BanRemove) => format!("{CANCEL} unbanned <@{}>", log.target_id?),
+            Member(MemberAction::Kick) => format!("{CANCEL} kicked <@{}>", log.target_id?),
             _ => return None,
         }
     ))
@@ -250,7 +254,10 @@ async fn event_handler(c: &serenity::all::Context, e: &FullEvent) -> Result<()> 
                                 .empty_users()
                                 .empty_roles(),
                         )
-                        .content(format!("<@{author}> {EDIT} their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```")),
+                        .content(format!(
+                            "<t:{}:d> <@{author}> {EDIT} their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```",
+                            id.created_at().unix_timestamp()
+                        )),
                 )
                 .await
                 .unwrap();
@@ -330,7 +337,8 @@ async fn event_handler(c: &serenity::all::Context, e: &FullEvent) -> Result<()> 
                                 if a == 1224510735959462068 { return Ok(()) }
                                 if author.get() != a || since > 20 {
                                     format!(
-                                        "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):```\n{content}\n```\n{}",
+                                        "<t:{}:d> <@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):```\n{content}\n```\n{}",
+                                        deleted_message_id.created_at().unix_timestamp(),
                                         links
                                             .into_iter()
                                             .reduce(|a, b| format!("{a} {b}"))
@@ -338,7 +346,8 @@ async fn event_handler(c: &serenity::all::Context, e: &FullEvent) -> Result<()> 
                                     )
                                 } else {
                                     format!(
-                                        "<@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):```\n{content}\n```\n{}",
+                                        "<t:{}:d> <@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):```\n{content}\n```\n{}",
+                                        deleted_message_id.created_at().unix_timestamp(),
                                         links
                                             .into_iter()
                                             .reduce(|a, b| format!("{a} {b}"))
@@ -346,7 +355,10 @@ async fn event_handler(c: &serenity::all::Context, e: &FullEvent) -> Result<()> 
                                     )
                                 }
                             }
-                            None => format!("<@{who}> {CANCEL} deleted message by <@{author}> in <#{channel_id}> (content unavailable)"),
+                            None => format!(
+                                "<t:{}:d> <@{who}> {CANCEL} deleted message by <@{author}> in <#{channel_id}> (content unavailable)",
+                                deleted_message_id.created_at().unix_timestamp()
+                            ),
                         }),
                 )
                 .await
@@ -365,7 +377,7 @@ impl Bot {
             std::env::var("TOKEN").unwrap_or_else(|_| read_to_string("token").expect("wher token"));
         let f = poise::Framework::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![help(), reload(), redact()],
+                commands: vec![help(), reload(), redact(), spy_context(), spy_slash()],
                 on_error: |e| Box::pin(on_error(e)),
                 event_handler: |c, e, _, _| Box::pin(event_handler(c, e)),
                 ..Default::default()
@@ -417,6 +429,82 @@ const OWNER: u64 = 696196765564534825;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     Bot::spawn().await;
+}
+
+async fn spy_(c: Context<'_>, who: UserId) -> Result<()> {
+    let h = c.reply("please check your dm's").await?;
+    let mut n = 0u64;
+    for (x, y) in db::values()
+        .filter(|(_, _, x)| *x == who)
+        .map(|(x, y, _)| (x, y))
+    {
+        if let Err(_) = c
+            .author()
+            .dm(
+                c,
+                CreateMessage::new().content(format!(
+                    "```{x}```\n{}",
+                    y.into_iter()
+                        .reduce(|a, b| format!("{a} {b}"))
+                        .unwrap_or_default()
+                )),
+            )
+            .await
+            && n == 0
+        {
+            h.edit(
+                c,
+                CreateReply::default().content("please open your dm's (couldnt send)"),
+            )
+            .await?;
+            return Ok(());
+        };
+        n += 1;
+    }
+    h.edit(
+        c,
+        CreateReply::default().content(format!("all ({n}) sent. please check your dm's")),
+    )
+    .await?;
+    Ok(())
+}
+
+#[poise::command(guild_only, context_menu_command = "Read all messages")]
+/// Collect the messages of a user.
+/// Will be dispatched to your DM's.
+/// This command may take some time.
+pub async fn spy_context(
+    c: Context<'_>,
+    #[description = "the user to spy on"] who: User,
+) -> Result<()> {
+    let u = c.author_member().await.ok_or(anyhow::anyhow!("dang"))?;
+    if !(u.user.name == "bendn"
+        || u.roles.contains(&RoleId::new(925676016708489227))
+        || u.roles.contains(&RoleId::new(925708634896367647)))
+    {
+        poise::say_reply(c, "access denied. this incident will be reported").await?;
+        return Ok(());
+    }
+    spy_(c, who.id).await
+}
+
+#[poise::command(slash_command, rename = "spy")]
+/// Collect the messages of a user.
+/// Will be dispatched to your DM's.
+/// This command may take some time.
+pub async fn spy_slash(
+    c: Context<'_>,
+    #[description = "the user to spy on"] who: String,
+) -> Result<()> {
+    let u = c.author_member().await.ok_or(anyhow::anyhow!("dang"))?;
+    if !(u.user.name == "bendn"
+        || u.roles.contains(&RoleId::new(925676016708489227))
+        || u.roles.contains(&RoleId::new(925708634896367647)))
+    {
+        poise::say_reply(c, "access denied. this incident will be reported").await?;
+        return Ok(());
+    }
+    spy_(c, UserId::new(who.parse()?)).await
 }
 
 #[poise::command(slash_command)]
