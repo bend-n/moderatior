@@ -141,6 +141,16 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                     log.target_id?
                 )
             ),
+            Thread(ThreadAction::Delete) => format!(
+                "{CANCEL} deleted thread `{}`",
+                log.changes.iter().flatten().into_iter().find_map(|x| {
+                    if let Change::Name { old: Some(x), .. } = x {
+                        Some(x)
+                    } else {
+                        None
+                    }
+                })?
+            ),
             Role(RoleAction::Update) => format!("{ROTATE} role <@&{}>\n{changes}", log.target_id?),
             Member(MemberAction::RoleUpdate)
                 if let Some(t) = log.target_id
@@ -149,6 +159,9 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                 format!("{ROTATE} roles of <@{t}>: {changes}")
             }
             Member(MemberAction::RoleUpdate) => format!("{ROTATE} roles: {changes}"),
+            Member(MemberAction::BanAdd) => format!("{CANCEL} banned <@&{}>", log.target_id?),
+            Member(MemberAction::BanRemove) => format!("{CANCEL} unbanned <@&{}>", log.target_id?),
+            Member(MemberAction::Kick) => format!("{CANCEL} kicked <@&{}>", log.target_id?),
             _ => return None,
         }
     ))
@@ -166,6 +179,184 @@ fn diff(old: &str, new: &str) -> String {
         .replace('`', "\u{200b}`")
 }
 
+async fn event_handler(c: &serenity::all::Context, e: &FullEvent) -> Result<()> {
+    match e {
+        FullEvent::GuildAuditLogEntryCreate { entry, .. } => {
+            let Some(h) = format(entry.clone()) else {
+                return Ok(());
+            };
+            ChannelId::new(1220060625338761286)
+                .send_message(
+                    c,
+                    CreateMessage::new()
+                        .allowed_mentions(CreateAllowedMentions::new().empty_users().empty_roles())
+                        .content(h),
+                )
+                .await?;
+        }
+        FullEvent::GuildMemberAddition { new_member } => {
+            ChannelId::new(944772532559568936)
+                .send_message(
+                    c,
+                    CreateMessage::new().content(format!("{RIGHT} hi <@{}>", new_member.user.id)),
+                )
+                .await
+                .unwrap();
+        }
+        FullEvent::GuildMemberRemoval {
+            user,
+            member_data_if_available,
+            ..
+        } => {
+            ChannelId::new(944772532559568936)
+                .send_message(
+                    c,
+                    CreateMessage::new().content(format!(
+                        "{LEFT} goodbye {} <@{}>",
+                        match member_data_if_available {
+                            Some(x) => x.nick.as_ref().unwrap_or(&user.name),
+                            None => &user.name,
+                        },
+                        user.id
+                    )),
+                )
+                .await
+                .unwrap();
+        }
+        FullEvent::Message { new_message } => db::set_m(new_message.clone()),
+        FullEvent::MessageUpdate {
+            event:
+                MessageUpdateEvent {
+                    id,
+                    channel_id,
+                    content: Some(content),
+                    author:
+                        Some(User {
+                            id: author, bot, ..
+                        }),
+                    attachments: Some(attachments),
+                    ..
+                },
+            ..
+        } if !bot => {
+            if let Some((oc, _, _)) = db::get(id.get()) {
+                let diff = diff(&oc, content);
+                ChannelId::new(1226396559185285280)
+                .send_message(
+                    c,
+                    CreateMessage::new()
+                        .allowed_mentions(
+                            CreateAllowedMentions::new()
+                                .empty_users()
+                                .empty_roles(),
+                        )
+                        .content(format!("<@{author}> {EDIT} their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```")),
+                )
+                .await
+                .unwrap();
+            }
+            db::set(
+                id.get(),
+                (
+                    content.clone(),
+                    attachments.iter().map(|a| a.url.clone()).collect(),
+                    author.get(),
+                ),
+            )
+        }
+        FullEvent::MessageDelete {
+            deleted_message_id,
+            channel_id,
+            ..
+        } => {
+            let log = c
+                .http()
+                .get_guild(925674713429184564.into())
+                .await
+                .unwrap()
+                .audit_logs(
+                    c,
+                    Some(audit_log::Action::Message(MessageAction::Delete)),
+                    None,
+                    None,
+                    Some(1),
+                )
+                .await?
+                .entries
+                .into_iter()
+                .next()
+                .unwrap();
+
+            let ban_log = c
+                .http()
+                .get_guild(925674713429184564.into())
+                .await
+                .unwrap()
+                .audit_logs(
+                    c,
+                    Some(audit_log::Action::Member(MemberAction::BanAdd)),
+                    None,
+                    None,
+                    Some(1),
+                )
+                .await?
+                .entries
+                .into_iter()
+                .next()
+                .unwrap()
+                .id;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let since = now.saturating_sub(log.id.created_at().unix_timestamp() as _);
+            let since_ban = now.saturating_sub(ban_log.created_at().unix_timestamp() as _);
+            if since_ban < 60 {
+                return Ok(());
+            }
+            let (author, who) = (log.target_id.unwrap(), log.user_id);
+            ChannelId::new(1226396559185285280)
+                .send_message(
+                    c,
+                    CreateMessage::new()
+                        .allowed_mentions(
+                            CreateAllowedMentions::new()
+                                .empty_users()
+                                .empty_roles(),
+                        )
+                        .content(match db::get(deleted_message_id.get()) {
+                            Some((content, links, a)) => {
+                                if a == 1224510735959462068 { return Ok(()) }
+                                if author.get() != a || since > 20 {
+                                    format!(
+                                        "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):```\n{content}\n```\n{}",
+                                        links
+                                            .into_iter()
+                                            .reduce(|a, b| format!("{a} {b}"))
+                                            .unwrap_or_else(String::new)
+                                    )
+                                } else {
+                                    format!(
+                                        "<@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):```\n{content}\n```\n{}",
+                                        links
+                                            .into_iter()
+                                            .reduce(|a, b| format!("{a} {b}"))
+                                            .unwrap_or_else(String::new)
+                                    )
+                                }
+                            }
+                            None => format!("<@{who}> {CANCEL} deleted message by <@{author}> in <#{channel_id}> (content unavailable)"),
+                        }),
+                )
+                .await
+                .unwrap();
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
 pub struct Bot;
 impl Bot {
     pub async fn spawn() {
@@ -176,114 +367,7 @@ impl Bot {
             .options(poise::FrameworkOptions {
                 commands: vec![help(), reload(), redact()],
                 on_error: |e| Box::pin(on_error(e)),
-                event_handler: |c, e, _, _| {
-                    Box::pin(async move {
-                        match e {
-                            FullEvent::GuildAuditLogEntryCreate { entry, .. } => {
-                                let Some(h) = format(entry.clone()) else {
-                                    return Ok(());
-                                };
-                                ChannelId::new(1220060625338761286).send_message(
-                                    c,
-                                    CreateMessage::new()
-                                        .allowed_mentions(CreateAllowedMentions::new().empty_users().empty_roles())
-                                        .content(h),
-                                )
-                                .await?;
-                            }
-                            FullEvent::GuildMemberAddition { new_member } => {
-                                ChannelId::new(944772532559568936)
-                                    .send_message(
-                                        c,
-                                        CreateMessage::new()
-                                            .content(format!("{RIGHT} hi <@{}>", new_member.user.id),
-                                    ))
-                                    .await
-                                    .unwrap();
-                            }
-                            FullEvent::GuildMemberRemoval { user, member_data_if_available, .. } => {
-                                ChannelId::new(944772532559568936)
-                                    .send_message(
-                                        c,
-                                        CreateMessage::new()
-                                            .content(format!("{LEFT} goodbye {} <@{}>", match member_data_if_available {
-                                                Some(x) => x.nick.as_ref().unwrap_or(&user.name),
-                                                None => &user.name,
-                                            }, user.id)),
-                                    )
-                                    .await
-                                    .unwrap();
-                            },
-                            FullEvent::Message { new_message } => db::set_m(new_message.clone()),
-                            FullEvent::MessageUpdate { event: MessageUpdateEvent { id, channel_id, content: Some(content), author: Some(User{ id: author, bot, ..}), attachments: Some(attachments), .. }, .. } if !bot => {
-                                if let Some((oc, _, _)) = db::get(id.get()) {
-                                    let diff = diff(&oc, content);
-                                    ChannelId::new(1226396559185285280)
-                                    .send_message(
-                                        c,
-                                        CreateMessage::new()
-                                            .allowed_mentions(
-                                                CreateAllowedMentions::new()
-                                                    .empty_users()
-                                                    .empty_roles(),
-                                            )
-                                            .content(format!("<@{author}> {EDIT} their message https://discord.com/channels/925674713429184564/{channel_id}/{id}\n```diff{diff}```")),
-                                    )
-                                    .await
-                                    .unwrap();
-                                }
-                                db::set(id.get(), (content.clone(), attachments.iter().map(|a|a.url.clone()).collect(), author.get()))
-                            },
-                            FullEvent::MessageDelete {
-                                deleted_message_id, channel_id, ..
-                            } => {
-                                let log = c.http().get_guild(925674713429184564.into()).await.unwrap()
-                                    .audit_logs(c, Some(audit_log::Action::Message(MessageAction::Delete)), None, None, Some(1)).await?
-                                    .entries.into_iter().next().unwrap();
-                            
-                                let since = std::time::SystemTime::now().duration_since( std::time::UNIX_EPOCH).unwrap().as_secs().saturating_sub(log.id.created_at().unix_timestamp() as _);
-                                let (author, who) = (log.target_id.unwrap(), log.user_id);
-                                ChannelId::new(1226396559185285280)
-                                    .send_message(
-                                        c,
-                                        CreateMessage::new()
-                                            .allowed_mentions(
-                                                CreateAllowedMentions::new()
-                                                    .empty_users()
-                                                    .empty_roles(),
-                                            )
-                                            .content(match db::get(deleted_message_id.get()) {
-                                                Some((content, links, a)) => {
-                                                    if a == 1224510735959462068 { return Ok(()) }
-                                                    if author.get() != a || since > 20 {
-                                                        format!(
-                                                            "<@{a}> {CANCEL} deleted their own message (in <#{channel_id}>):```\n{content}\n```\n{}",
-                                                            links
-                                                                .into_iter()
-                                                                .reduce(|a, b| format!("{a} {b}"))
-                                                                .unwrap_or_else(String::new)
-                                                        )
-                                                    } else {
-                                                        format!(
-                                                            "<@{who}> {CANCEL} deleted message by <@{author}> (in <#{channel_id}>):```\n{content}\n```\n{}",
-                                                            links
-                                                                .into_iter()
-                                                                .reduce(|a, b| format!("{a} {b}"))
-                                                                .unwrap_or_else(String::new)
-                                                        )
-                                                    }
-                                                }
-                                                None => format!("<@{who}> {CANCEL} deleted message by <@{author}> in <#{channel_id}> (content unavailable)"),
-                                            }),
-                                    )
-                                    .await
-                                    .unwrap();
-                            }
-                            _ => (),
-                        }
-                        Ok(())
-                    })
-                },
+                event_handler: |c, e, _, _| Box::pin(event_handler(c, e)),
                 ..Default::default()
             })
             .setup(|ctx, _ready, f| {
