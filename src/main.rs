@@ -25,6 +25,15 @@ const EDIT: &str = "<:edi:1231825459688378460>";
 pub fn format(log: AuditLogEntry) -> Option<String> {
     use serenity::model::guild::audit_log::Action::*;
     use serenity::model::guild::audit_log::Change::*;
+    macro_rules! pick {
+        ($t:ident) => {
+            log.changes
+                .iter()
+                .flatten()
+                .into_iter()
+                .find(|y| matches!(y, $t { .. }))
+        };
+    }
     let changes = log
         .changes
         .iter()
@@ -124,8 +133,7 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
         .reduce(|a, b| format!("{a}\n{b}"))
         .unwrap_or_else(String::new);
     Some(format!(
-        "<t:{}:d> <@{}> {}",
-        log.id.created_at().unix_timestamp(),
+        "<@{}> {}",
         log.user_id,
         match log.action {
             GuildUpdate => format!("guild changes\n{changes}"),
@@ -142,16 +150,12 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                     log.target_id?
                 )
             ),
-            Thread(ThreadAction::Delete) => format!(
-                "{CANCEL} deleted thread `{}`",
-                log.changes.iter().flatten().into_iter().find_map(|x| {
-                    if let Change::Name { old: Some(x), .. } = x {
-                        Some(x)
-                    } else {
-                        None
-                    }
-                })?
-            ),
+            Thread(ThreadAction::Delete)
+                if let Some(Name {
+                    new: None,
+                    old: Some(old),
+                }) = pick!(Name) =>
+                format!("{CANCEL} deleted thread `{old}`"),
             Role(RoleAction::Update) => format!("{ROTATE} role <@&{}>\n{changes}", log.target_id?),
             Member(MemberAction::RoleUpdate)
                 if let Some(t) = log.target_id
@@ -166,6 +170,22 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
             ),
             Member(MemberAction::BanRemove) => format!("{CANCEL} unbanned <@{}>", log.target_id?),
             Member(MemberAction::Kick) => format!("{CANCEL} kicked <@{}>", log.target_id?),
+            Member(MemberAction::Update)
+                if let Some(CommunicationDisabledUntil { new: Some(new), .. }) =
+                    pick!(CommunicationDisabledUntil) =>
+            {
+                format!(
+                    "<:mut:1239018529970327673> <@{}> until <t:{}:d> ({}): {}",
+                    log.target_id?,
+                    new.unix_timestamp(),
+                    humantime::format_duration(
+                        new.signed_duration_since(*log.id.created_at())
+                            .to_std()
+                            .ok()?,
+                    ),
+                    log.reason?
+                )
+            }
             _ => return None,
         }
     ))
