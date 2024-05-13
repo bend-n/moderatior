@@ -397,7 +397,7 @@ impl Bot {
             std::env::var("TOKEN").unwrap_or_else(|_| read_to_string("token").expect("wher token"));
         let f = poise::Framework::builder()
             .options(poise::FrameworkOptions {
-                commands: vec![help(), reload(), redact(), spy_context(), spy_slash()],
+                commands: vec![help(), reload(), redact(), spy()],
                 on_error: |e| Box::pin(on_error(e)),
                 event_handler: |c, e, _, _| Box::pin(event_handler(c, e)),
                 ..Default::default()
@@ -451,11 +451,27 @@ async fn main() {
     Bot::spawn().await;
 }
 
-async fn spy_(c: Context<'_>, who: UserId) -> Result<()> {
+#[poise::command(
+    slash_command,
+    context_menu_command = "Read all messages",
+    rename = "spy"
+)]
+/// Collect the messages of a user.
+/// Will be dispatched to your DM's.
+/// This command may take some time.
+pub async fn spy(c: Context<'_>, #[description = "the user to spy on"] who: User) -> Result<()> {
+    let u = c.author_member().await.ok_or(anyhow::anyhow!("dang"))?;
+    if !(u.user.name == "bendn"
+        || u.roles.contains(&RoleId::new(925676016708489227))
+        || u.roles.contains(&RoleId::new(925708634896367647)))
+    {
+        poise::say_reply(c, "access denied. this incident will be reported").await?;
+        return Ok(());
+    }
     let h = c.reply("please check your dm's").await?;
     let mut n = 0u64;
     for (x, y) in db::values()
-        .filter(|(_, _, x)| *x == who)
+        .filter(|(_, _, x)| *x == who.id)
         .map(|(x, y, _)| (x, y))
     {
         if let Err(_) = c
@@ -487,44 +503,6 @@ async fn spy_(c: Context<'_>, who: UserId) -> Result<()> {
     )
     .await?;
     Ok(())
-}
-
-#[poise::command(guild_only, context_menu_command = "Read all messages")]
-/// Collect the messages of a user.
-/// Will be dispatched to your DM's.
-/// This command may take some time.
-pub async fn spy_context(
-    c: Context<'_>,
-    #[description = "the user to spy on"] who: User,
-) -> Result<()> {
-    let u = c.author_member().await.ok_or(anyhow::anyhow!("dang"))?;
-    if !(u.user.name == "bendn"
-        || u.roles.contains(&RoleId::new(925676016708489227))
-        || u.roles.contains(&RoleId::new(925708634896367647)))
-    {
-        poise::say_reply(c, "access denied. this incident will be reported").await?;
-        return Ok(());
-    }
-    spy_(c, who.id).await
-}
-
-#[poise::command(slash_command, rename = "spy")]
-/// Collect the messages of a user.
-/// Will be dispatched to your DM's.
-/// This command may take some time.
-pub async fn spy_slash(
-    c: Context<'_>,
-    #[description = "the user to spy on"] who: String,
-) -> Result<()> {
-    let u = c.author_member().await.ok_or(anyhow::anyhow!("dang"))?;
-    if !(u.user.name == "bendn"
-        || u.roles.contains(&RoleId::new(925676016708489227))
-        || u.roles.contains(&RoleId::new(925708634896367647)))
-    {
-        poise::say_reply(c, "access denied. this incident will be reported").await?;
-        return Ok(());
-    }
-    spy_(c, UserId::new(who.parse()?)).await
 }
 
 #[poise::command(slash_command)]
