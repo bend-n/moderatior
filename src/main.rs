@@ -175,7 +175,7 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                     pick!(CommunicationDisabledUntil) =>
             {
                 format!(
-                    "<:mut:1239018529970327673> <@{}> until <t:{}:d> ({}): {}",
+                    "<:mut:1239018529970327673> <@{}> until <t:{}:d> ({}){}",
                     log.target_id?,
                     new.unix_timestamp(),
                     humantime::format_duration(
@@ -183,7 +183,19 @@ pub fn format(log: AuditLogEntry) -> Option<String> {
                             .to_std()
                             .ok()?,
                     ),
-                    log.reason?
+                    log.reason.map(|x| format!(": {x}")).unwrap_or_default()
+                )
+            }
+            Member(MemberAction::Update)
+                if let Some(CommunicationDisabledUntil {
+                    old: Some(old),
+                    new: None,
+                }) = pick!(CommunicationDisabledUntil) =>
+            {
+                format!(
+                    "<:unmut:1243007760832921602> <@{}> (would have ended at <t:{}:d>)",
+                    log.target_id?,
+                    old.unix_timestamp(),
                 )
             }
             _ => return None,
