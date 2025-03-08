@@ -1,7 +1,7 @@
 // TODO pruning?
-use kv::*;
-use poise::serenity_prelude::*;
 use std::sync::LazyLock;
+
+use kv::*;
 
 fn cfg() -> kv::Config {
     kv::Config {
@@ -22,31 +22,6 @@ pub fn set(k: u64, v: (String, Vec<String>, u64)) {
 }
 pub fn get(k: u64) -> Option<(String, Vec<String>, u64)> {
     BU.get(&k.into()).unwrap().map(|x| x.0)
-}
-pub fn keys() -> impl Iterator<Item = MessageId> {
-    BU.iter()
-        .filter_map(Result::ok)
-        .filter_map(|x| x.key::<u64>().ok())
-        .map(|x| MessageId::new(x))
-}
-pub fn values() -> impl Iterator<Item = (String, Vec<String>, UserId)> {
-    BU.iter()
-        .filter_map(Result::ok)
-        .filter_map(|x| x.value::<Bincode<(String, Vec<String>, u64)>>().ok())
-        .map(|Bincode((y, z, α))| (y, z, UserId::new(α)))
-}
-pub fn iter() -> impl Iterator<Item = (MessageId, (String, Vec<String>, UserId))> {
-    BU.iter()
-        .filter_map(Result::ok)
-        .filter_map(|x| {
-            x.key::<u64>()
-                .and_then(|y| {
-                    x.value::<Bincode<(String, Vec<String>, u64)>>()
-                        .map(|x| (y, x))
-                })
-                .ok()
-        })
-        .map(|(x, Bincode((y, z, α)))| (MessageId::new(x), (y, z, UserId::new(α))))
 }
 pub fn sz() -> f32 {
     DB.size_on_disk().unwrap() as f32 / (1 << 20) as f32

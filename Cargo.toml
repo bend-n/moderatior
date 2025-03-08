@@ -21,11 +21,18 @@ poise = { git = "https://github.com/serenity-rs/poise" }
 anyhow = "1.0.75"
 jemallocator-global = "0.3.2"
 ahash = "0.8.11"
-emoji = { git = "https://github.com/apricot-conservation-project/emoji", version = "0.1.0" }
+emojib = { git = "https://github.com/Apricot-Conservation-Project/emoji", package = "emoji" }
 kv = { version = "0.24.0", features = ["bincode-value"] }
 sled = { version = "0.34.7", features = ["compression"] }
 diff = "0.1.13"
 humantime = "2.1.0"
+phf = "0.11.3"
+mindus = { version = "5.0.29", default-features = false }
+
+[build-dependencies]
+emojib = { git = "https://github.com/Apricot-Conservation-Project/emoji", features = [
+  "build",
+], package = "emoji" }
 
 [profile.release]
 strip = true
